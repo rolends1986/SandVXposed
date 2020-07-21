@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Magic App</string>
+    <string name="textview">HelloWord</string>
+</resources>

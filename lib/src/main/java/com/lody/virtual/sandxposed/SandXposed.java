@@ -47,7 +47,9 @@ public class SandXposed {
 
         for (InstalledAppInfo module:appInfos) {
             if (TextUtils.equals(packageName, module.packageName)) {
-                Log.d("injectXposedModule", "injectSelf : " + processName);
+                Log.d("VirtualHook", "injectSelf : " + processName);
+            }else {
+                Log.d("VirtualHook", "injectXposedModule load : " + processName);
             }
             XposedCompat.loadModule(module.apkPath, module.getOdexFile().getParent(), module.libPath, XposedBridge.class.getClassLoader());
         }

@@ -40,6 +40,7 @@ import com.lody.virtual.client.ipc.VActivityManager;
 import com.lody.virtual.client.ipc.VDeviceManager;
 import com.lody.virtual.client.ipc.VPackageManager;
 import com.lody.virtual.client.ipc.VirtualStorageManager;
+import com.lody.virtual.helper.DexHelper;
 import com.lody.virtual.sandxposed.SandXposed;
 import com.lody.virtual.client.stub.VASettings;
 import com.lody.virtual.helper.compat.BuildCompat;
@@ -52,13 +53,21 @@ import com.lody.virtual.remote.PendingResultData;
 import com.lody.virtual.remote.VDeviceInfo;
 
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.net.URL;
+import java.net.URLClassLoader;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 
+import dalvik.system.PathClassLoader;
 import mirror.android.app.ActivityThread;
 import mirror.android.app.ActivityThreadNMR1;
 import mirror.android.app.ContextImpl;
@@ -68,6 +77,7 @@ import mirror.android.app.LoadedApk;
 import mirror.android.app.LoadedApkICS;
 import mirror.android.app.LoadedApkKitkat;
 import mirror.android.content.ContentProviderHolderOreo;
+import mirror.android.content.res.AssetManager;
 import mirror.android.content.res.CompatibilityInfo;
 import mirror.android.providers.Settings;
 import mirror.android.renderscript.RenderScriptCacheDir;
@@ -267,6 +277,7 @@ public final class VClientImpl extends IVClient.Stub {
         Object mainThread = VirtualCore.mainThread();
         NativeEngine.startDexOverride();
         Context context = createPackageContext(data.appInfo.packageName);
+
         System.setProperty("java.io.tmpdir", context.getCacheDir().getAbsolutePath());
         File codeCacheDir;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -293,6 +304,7 @@ public final class VClientImpl extends IVClient.Stub {
                 RenderScript.setupDiskCache.call(codeCacheDir);
             }
         }
+
         Object boundApp = fixBoundApp(mBoundApplication);
         mBoundApplication.info = ContextImpl.mPackageInfo.get(context);
         mirror.android.app.ActivityThread.AppBindData.info.set(boundApp, data.info);
@@ -321,6 +333,7 @@ public final class VClientImpl extends IVClient.Stub {
 
         mirror.android.app.ActivityThread.mInitialApplication.set(mainThread, mInitialApplication);
         ContextFixer.fixContext(mInitialApplication);
+        fixLegacyLib(mInitialApplication);
         if (Build.VERSION.SDK_INT >= 24 && "com.tencent.mm:recovery".equals(processName)) {
             fixWeChatRecovery(mInitialApplication);
         }
@@ -355,8 +368,42 @@ public final class VClientImpl extends IVClient.Stub {
         VirtualCore.get().getComponentDelegate().afterApplicationCreate(mInitialApplication);
     }
 
+    private void fixLegacyLib(Application app) {
+        //android 9.0 不在支持org.apache.http.legacy
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            String libPath = VEnvironment.getAppLibDirectory(app.getPackageName()).getAbsolutePath();
+            File legacyFile = new File(libPath + "/" + "org.apache.http.legacy.dex");
+            if (!legacyFile.exists()) {
+                try {
+                    InputStream is = VirtualCore.get().getContext().getAssets().open("org.apache.http.legacy.dex");
+                    FileOutputStream out = new FileOutputStream(legacyFile);
+                    int length = -1;
+                    byte[] buf = new byte[1024];
+                    while ((length = is.read(buf)) != -1) {
+                        out.write(buf, 0, length);
+                    }
+                    out.flush();
+                    is.close();
+                    out.close();
+                    Log.w("VirtualHook", " legacyFile copy:" + legacyFile.getAbsolutePath());
+                } catch (Exception e) {
+                    Log.e("VirtualHook", "legacy file:" + app.getPackageName(), e);
+                }
+            } else {
+                Log.w("VirtualHook", " legacyFile exists:" + legacyFile.getAbsolutePath());
+            }
+            try {
+                DexHelper.loadDexFile(app,legacyFile.getAbsolutePath());
+                URL url = legacyFile.toURI().toURL();
+            } catch (Exception e) {
+                Log.e("VirtualHook", "legacy file:" + app.getPackageName(), e);
+            }
+        }
+    }
+
     private void fixWeChatRecovery(Application app) {
         try {
+
             Field field = app.getClassLoader().loadClass("com.tencent.recovery.Recovery").getField("context");
             field.setAccessible(true);
             if (field.get(null) != null) {
@@ -420,9 +467,12 @@ public final class VClientImpl extends IVClient.Stub {
             NativeEngine.redirectDirectory("/data/user_de/0/" + info.packageName, info.dataDir);
         }
         String libPath = VEnvironment.getAppLibDirectory(info.packageName).getAbsolutePath();
+        Log.w("VirtualHook", "startIOUniformer libPath:" + libPath);
         String userLibPath = new File(VEnvironment.getUserSystemDirectory(userId), info.packageName + "/lib").getAbsolutePath();
+        Log.w("VirtualHook", "startIOUniformer userLibPath:" + userLibPath);
         NativeEngine.redirectDirectory(userLibPath, libPath);
         NativeEngine.redirectDirectory("/data/data/" + info.packageName + "/lib/", libPath);
+        Log.w("VirtualHook", "startIOUniformer packageName:" + info.packageName);
         NativeEngine.redirectDirectory("/data/user/0/" + info.packageName + "/lib/", libPath);
 
         VirtualStorageManager vsManager = VirtualStorageManager.get();
